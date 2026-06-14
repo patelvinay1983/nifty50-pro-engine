@@ -1,5 +1,6 @@
 from flask import Flask, jsonify
 import requests
+import time
 
 app = Flask(__name__)
 
@@ -7,90 +8,123 @@ URL = "https://www.nseindia.com/api/option-chain-indices?symbol=NIFTY"
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0",
-    "Accept": "application/json",
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Connection": "keep-alive"
 }
 
 session = requests.Session()
 
+# -------- STABLE DATA FETCHER --------
+def fetch_option_chain():
 
-def fetch():
     try:
+        # Step 1: warm-up session (cookie generation)
         session.get("https://www.nseindia.com", headers=HEADERS, timeout=5)
-        r = session.get(URL, headers=HEADERS, timeout=10)
-        return r.json()
+
+        # Step 2: fetch data
+        response = session.get(URL, headers=HEADERS, timeout=10)
+
+        if response.status_code != 200:
+            return None
+
+        return response.json()
+
     except:
         return None
 
 
+# -------- API STATUS --------
+@app.route("/api/status")
+def status():
+    return jsonify({
+        "engine": "NIFTY50 SMART MONEY ENGINE",
+        "status": "STABLE DATA LAYER ACTIVE",
+        "version": "4.0"
+    })
+
+
+# -------- MAIN SIGNAL ENGINE --------
 @app.route("/api/signal")
 def signal():
 
-    data = fetch()
+    data = fetch_option_chain()
 
-    if not data:
-        return jsonify({"signal": "NO TRADE", "error": "data unavailable"})
+    # SAFE FALLBACK (IMPORTANT)
+    if not data or "records" not in data:
+        return jsonify({
+            "signal": "NO TRADE",
+            "reason": "DATA_UNAVAILABLE",
+            "pcr": 0,
+            "confidence": 0,
+            "support": 0,
+            "resistance": 0,
+            "bullish_pressure": 0,
+            "bearish_pressure": 0
+        })
 
     records = data["records"]["data"]
 
     ce_total = 0
     pe_total = 0
-    ce_walls = {}
-    pe_walls = {}
 
-    for i in records:
+    ce_wall = {}
+    pe_wall = {}
 
-        if "CE" in i:
-            oi = i["CE"]["openInterest"]
-            strike = i["CE"]["strikePrice"]
+    # -------- PARSE OI --------
+    for item in records:
+
+        if "CE" in item:
+            oi = item["CE"].get("openInterest", 0)
+            strike = item["CE"].get("strikePrice", 0)
             ce_total += oi
-            ce_walls[strike] = ce_walls.get(strike, 0) + oi
+            ce_wall[strike] = ce_wall.get(strike, 0) + oi
 
-        if "PE" in i:
-            oi = i["PE"]["openInterest"]
-            strike = i["PE"]["strikePrice"]
+        if "PE" in item:
+            oi = item["PE"].get("openInterest", 0)
+            strike = item["PE"].get("strikePrice", 0)
             pe_total += oi
-            pe_walls[strike] = pe_walls.get(strike, 0) + oi
+            pe_wall[strike] = pe_wall.get(strike, 0) + oi
 
-    # PCR
-    pcr = pe_total / ce_total if ce_total else 0
-
-    # Strong walls
-    resistance = max(ce_walls, key=ce_walls.get) if ce_walls else 0
-    support = max(pe_walls, key=pe_walls.get) if pe_walls else 0
-
-    # Pressure score
+    # -------- CORE METRICS --------
     total = ce_total + pe_total
-    bull = pe_total / total * 100 if total else 0
-    bear = ce_total / total * 100 if total else 0
 
-    # Signal logic (SMART VERSION)
+    pcr = round(pe_total / ce_total, 2) if ce_total else 0
+
+    bullish = round((pe_total / total) * 100, 2) if total else 0
+    bearish = round((ce_total / total) * 100, 2) if total else 0
+
+    support = max(pe_wall, key=pe_wall.get) if pe_wall else 0
+    resistance = max(ce_wall, key=ce_wall.get) if ce_wall else 0
+
+    # -------- SMART SIGNAL LOGIC --------
     signal = "NO TRADE"
     confidence = 50
 
-    if pcr > 1.25 and bull > 55:
+    if pcr > 1.25 and bullish > 55:
         signal = "STRONG BUY CALL"
-        confidence = 80
+        confidence = 85
 
-    elif pcr > 1.1:
+    elif pcr > 1.10:
         signal = "WEAK BUY CALL"
-        confidence = 65
+        confidence = 70
 
-    elif pcr < 0.8 and bear > 55:
+    elif pcr < 0.80 and bearish > 55:
         signal = "STRONG BUY PUT"
-        confidence = 80
+        confidence = 85
 
     elif pcr < 0.95:
         signal = "WEAK BUY PUT"
-        confidence = 65
+        confidence = 70
 
     return jsonify({
-        "pcr": round(pcr, 2),
+        "pcr": pcr,
         "signal": signal,
         "confidence": confidence,
         "support": support,
         "resistance": resistance,
-        "bullish_pressure": round(bull, 2),
-        "bearish_pressure": round(bear, 2)
+        "bullish_pressure": bullish,
+        "bearish_pressure": bearish
     })
 
 
