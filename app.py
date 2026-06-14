@@ -1,106 +1,96 @@
 from flask import Flask, jsonify
 import requests
-import time
 
 app = Flask(__name__)
 
-NSE_URL = "https://www.nseindia.com/api/option-chain-indices?symbol=NIFTY"
+URL = "https://www.nseindia.com/api/option-chain-indices?symbol=NIFTY"
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-    "Accept": "application/json, text/plain, */*",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Connection": "keep-alive"
+    "User-Agent": "Mozilla/5.0",
+    "Accept": "application/json",
 }
 
 session = requests.Session()
 
-def get_nse_data():
+
+def fetch():
     try:
-        # Step 1: create session cookies
         session.get("https://www.nseindia.com", headers=HEADERS, timeout=5)
-
-        # Step 2: fetch option chain
-        response = session.get(NSE_URL, headers=HEADERS, timeout=10)
-
-        return response.json()
-
-    except Exception as e:
+        r = session.get(URL, headers=HEADERS, timeout=10)
+        return r.json()
+    except:
         return None
-
-
-@app.route("/")
-def home():
-    return "NIFTY50 PRO ENGINE - STABLE MODE"
-
-
-@app.route("/api/status")
-def status():
-    return jsonify({
-        "engine": "NIFTY50 PRO",
-        "status": "STABLE LIVE MODE",
-        "version": "3.1"
-    })
 
 
 @app.route("/api/signal")
 def signal():
 
-    data = get_nse_data()
+    data = fetch()
 
-    # 🔴 FALLBACK (VERY IMPORTANT)
     if not data:
-        return jsonify({
-            "error": "Data source unavailable",
-            "signal": "NO TRADE",
-            "pcr": 0,
-            "confidence": 0,
-            "support": 0,
-            "resistance": 0
-        })
+        return jsonify({"signal": "NO TRADE", "error": "data unavailable"})
 
-    records = data.get("records", {}).get("data", [])
+    records = data["records"]["data"]
 
-    total_ce = 0
-    total_pe = 0
+    ce_total = 0
+    pe_total = 0
+    ce_walls = {}
+    pe_walls = {}
 
-    ce_levels = []
-    pe_levels = []
+    for i in records:
 
-    for item in records:
-        if "CE" in item:
-            total_ce += item["CE"].get("openInterest", 0)
-            ce_levels.append(item["CE"].get("openInterest", 0))
+        if "CE" in i:
+            oi = i["CE"]["openInterest"]
+            strike = i["CE"]["strikePrice"]
+            ce_total += oi
+            ce_walls[strike] = ce_walls.get(strike, 0) + oi
 
-        if "PE" in item:
-            total_pe += item["PE"].get("openInterest", 0)
-            pe_levels.append(item["PE"].get("openInterest", 0))
+        if "PE" in i:
+            oi = i["PE"]["openInterest"]
+            strike = i["PE"]["strikePrice"]
+            pe_total += oi
+            pe_walls[strike] = pe_walls.get(strike, 0) + oi
 
-    # PCR calculation
-    pcr = round(total_pe / total_ce, 2) if total_ce else 0
+    # PCR
+    pcr = pe_total / ce_total if ce_total else 0
 
-    # Support / Resistance zones
-    support = max(pe_levels) if pe_levels else 0
-    resistance = max(ce_levels) if ce_levels else 0
+    # Strong walls
+    resistance = max(ce_walls, key=ce_walls.get) if ce_walls else 0
+    support = max(pe_walls, key=pe_walls.get) if pe_walls else 0
 
-    # Signal logic (cleaned)
+    # Pressure score
+    total = ce_total + pe_total
+    bull = pe_total / total * 100 if total else 0
+    bear = ce_total / total * 100 if total else 0
+
+    # Signal logic (SMART VERSION)
     signal = "NO TRADE"
     confidence = 50
 
-    if pcr > 1.25:
-        signal = "BUY CALL"
-        confidence = min(90, int(60 + (pcr - 1) * 50))
+    if pcr > 1.25 and bull > 55:
+        signal = "STRONG BUY CALL"
+        confidence = 80
 
-    elif pcr < 0.80:
-        signal = "BUY PUT"
-        confidence = min(90, int(60 + (1 - pcr) * 50))
+    elif pcr > 1.1:
+        signal = "WEAK BUY CALL"
+        confidence = 65
+
+    elif pcr < 0.8 and bear > 55:
+        signal = "STRONG BUY PUT"
+        confidence = 80
+
+    elif pcr < 0.95:
+        signal = "WEAK BUY PUT"
+        confidence = 65
 
     return jsonify({
-        "pcr": pcr,
+        "pcr": round(pcr, 2),
         "signal": signal,
         "confidence": confidence,
         "support": support,
-        "resistance": resistance
+        "resistance": resistance,
+        "bullish_pressure": round(bull, 2),
+        "bearish_pressure": round(bear, 2)
     })
 
 
