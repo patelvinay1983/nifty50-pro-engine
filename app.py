@@ -1,29 +1,18 @@
-    # -------- SMART SIGNAL CLASSES --------
+from flask import Flask, jsonify
 
-    signal = "NO EDGE (WAIT)"
-    confidence = 50
-    signal_reason = "MARKET BALANCED"
+app = Flask(__name__)
 
-    # High conviction BUY CALL
-    if pcr > 1.30 and bullish > 58:
-        signal = "HIGH CONVICTION BUY CALL"
-        confidence = 88
-        signal_reason = "STRONG CALL BUILDUP + PCR IMBALANCE"
+@app.route("/")
+def home():
+    return "NIFTY50 PRO Engine Running"
 
-    # Valid BUY CALL
-    elif pcr > 1.10:
-        signal = "VALID BUY CALL"
-        confidence = 70
-        signal_reason = "MODERATE CALL SIDE PRESSURE"
+@app.route("/api/status")
+def status():
+    return jsonify({
+        "status": "running",
+        "engine": "NIFTY50 PRO",
+        "version": "2.0"
+    })
 
-    # High conviction BUY PUT
-    elif pcr < 0.75 and bearish > 58:
-        signal = "HIGH CONVICTION BUY PUT"
-        confidence = 88
-        signal_reason = "STRONG PUT BUILDUP + PCR BIAS"
-
-    # Valid BUY PUT
-    elif pcr < 0.95:
-        signal = "VALID BUY PUT"
-        confidence = 70
-        signal_reason = "MODERATE PUT SIDE PRESSURE"
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000)
