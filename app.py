@@ -1,3 +1,4 @@
+```python
 from flask import Flask, jsonify
 import requests
 import time
@@ -7,39 +8,56 @@ app = Flask(__name__)
 NSE_URL = "https://www.nseindia.com/api/option-chain-indices?symbol=NIFTY"
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+    "User-Agent": "Mozilla/5.0",
     "Accept": "application/json, text/plain, */*",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Connection": "keep-alive"
+    "Accept-Language": "en-US,en;q=0.9"
 }
 
 session = requests.Session()
 
+# Cache (60 seconds)
+cache_data = None
+cache_timestamp = 0
+CACHE_TIME = 60
+
+
 def get_nse_data():
+    global cache_data, cache_timestamp
+
+    now = time.time()
+
+    # Use cached data if available
+    if cache_data and (now - cache_timestamp < CACHE_TIME):
+        return cache_data
+
     try:
-        # Step 1: create session cookies
+        # Generate cookies
         session.get("https://www.nseindia.com", headers=HEADERS, timeout=5)
 
-        # Step 2: fetch option chain
+        # Fetch option chain
         response = session.get(NSE_URL, headers=HEADERS, timeout=10)
+        data = response.json()
 
-        return response.json()
+        cache_data = data
+        cache_timestamp = now
 
-    except Exception as e:
-        return None
+        return data
+
+    except Exception:
+        return cache_data
 
 
 @app.route("/")
 def home():
-    return "NIFTY50 PRO ENGINE - STABLE MODE"
+    return "NIFTY50 PRO ENGINE - STAGE 2"
 
 
 @app.route("/api/status")
 def status():
     return jsonify({
         "engine": "NIFTY50 PRO",
-        "status": "STABLE LIVE MODE",
-        "version": "3.1"
+        "status": "RUNNING",
+        "version": "Stage 2"
     })
 
 
@@ -48,13 +66,11 @@ def signal():
 
     data = get_nse_data()
 
-    # 🔴 FALLBACK (VERY IMPORTANT)
     if not data:
         return jsonify({
-            "error": "Data source unavailable",
             "signal": "NO TRADE",
-            "pcr": 0,
             "confidence": 0,
+            "pcr": 0,
             "support": 0,
             "resistance": 0
         })
@@ -64,26 +80,28 @@ def signal():
     total_ce = 0
     total_pe = 0
 
-    ce_levels = []
-    pe_levels = []
+    ce_dict = {}
+    pe_dict = {}
 
     for item in records:
+
+        strike = item.get("strikePrice")
+
         if "CE" in item:
-            total_ce += item["CE"].get("openInterest", 0)
-            ce_levels.append(item["CE"].get("openInterest", 0))
+            ce_oi = item["CE"].get("openInterest", 0)
+            total_ce += ce_oi
+            ce_dict[strike] = ce_oi
 
         if "PE" in item:
-            total_pe += item["PE"].get("openInterest", 0)
-            pe_levels.append(item["PE"].get("openInterest", 0))
+            pe_oi = item["PE"].get("openInterest", 0)
+            total_pe += pe_oi
+            pe_dict[strike] = pe_oi
 
-    # PCR calculation
     pcr = round(total_pe / total_ce, 2) if total_ce else 0
 
-    # Support / Resistance zones
-    support = max(pe_levels) if pe_levels else 0
-    resistance = max(ce_levels) if ce_levels else 0
+    support = max(pe_dict, key=pe_dict.get) if pe_dict else 0
+    resistance = max(ce_dict, key=ce_dict.get) if ce_dict else 0
 
-    # Signal logic (cleaned)
     signal = "NO TRADE"
     confidence = 50
 
@@ -96,13 +114,15 @@ def signal():
         confidence = min(90, int(60 + (1 - pcr) * 50))
 
     return jsonify({
-        "pcr": pcr,
         "signal": signal,
         "confidence": confidence,
+        "pcr": pcr,
         "support": support,
         "resistance": resistance
     })
 
 
 if __name__ == "__main__":
-    app.run()
+    app.run(host="0.0.0.0", port=5000)
+```
+
